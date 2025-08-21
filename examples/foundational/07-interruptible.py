@@ -23,6 +23,8 @@ from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.transports.network.fastapi_websocket import FastAPIWebsocketParams
 from pipecat.transports.services.daily import DailyParams
 
+from pipecat.processors.metrics.arize_phoenix import ArizePhoenixOpenAITracer
+
 load_dotenv(override=True)
 
 # We store functions so objects (e.g. SileroVADAnalyzer) don't get
@@ -57,7 +59,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
         voice_id="71a7ad14-091c-4e8e-a314-022ece01c121",  # British Reading Lady
     )
 
-    llm = OpenAILLMService(api_key=os.getenv("OPENAI_API_KEY"))
+    llm = OpenAILLMService(api_key=os.getenv("OPENAI_API_KEY"), metrics=ArizePhoenixOpenAITracer())
 
     messages = [
         {
