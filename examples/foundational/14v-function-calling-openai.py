@@ -77,6 +77,30 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
         instructions="Please speak clearly and at a moderate pace.",
     )
 
+    ################
+    ################
+    """
+    ~ not the right way to do this ~
+
+    see a lot of this warning in console:
+    python3.12/site-packages/openinference/instrumentation/openai/_request.py:261: RuntimeWarning: coroutine 'AsyncAPIResponse.parse' was never awaited
+      _finish_tracing(
+    RuntimeWarning: Enable tracemalloc to get the object allocation traceback
+    """
+    import uuid
+    from openinference.instrumentation import using_session
+    from phoenix.otel import register
+    from openinference.instrumentation.openai import OpenAIInstrumentor
+
+    # PHOENIX_API_KEY=...
+    # PHOENIX_COLLECTOR_ENDPOINT=http://localhost:6006 || "https://app.phoenix.arize.com/s/your_space_name"
+    tracer_provider = register(
+        batch=True,  # uses a batch span processor
+    )
+    OpenAIInstrumentor().instrument(tracer_provider=tracer_provider)
+    ################
+    ################
+
     # model choices: gpt-4o, gpt-4.1, etc.
     llm = OpenAILLMService(api_key=os.getenv("OPENAI_API_KEY"))
 
@@ -161,7 +185,13 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
 
     runner = PipelineRunner(handle_sigint=runner_args.handle_sigint)
 
-    await runner.run(task)
+    ################
+    ################
+    session_id = str(uuid.uuid4())
+    with using_session(session_id=session_id):
+        await runner.run(task)
+    ################
+    ################
 
 
 async def bot(runner_args: RunnerArguments):
