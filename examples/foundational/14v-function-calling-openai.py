@@ -37,6 +37,9 @@ async def fetch_weather_from_api(params: FunctionCallParams):
 async def fetch_restaurant_recommendation(params: FunctionCallParams):
     await params.result_callback({"name": "The Golden Dragon"})
 
+import uuid
+from pipecat.processors.metrics.arize_phoenix import ArizePhoenixOpenAITracer
+from openinference.instrumentation import using_session
 
 # We store functions so objects (e.g. SileroVADAnalyzer) don't get
 # instantiated. The function will be called when the desired transport gets
@@ -59,7 +62,6 @@ transport_params = {
     ),
 }
 
-
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     logger.info(f"Starting bot")
 
@@ -77,8 +79,8 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
         instructions="Please speak clearly and at a moderate pace.",
     )
 
-    # model choices: gpt-4o, gpt-4.1, etc.
-    llm = OpenAILLMService(api_key=os.getenv("OPENAI_API_KEY"))
+    session_id = str(uuid.uuid4())
+    llm = OpenAILLMService(api_key=os.getenv("OPENAI_API_KEY"), metrics=ArizePhoenixOpenAITracer(session_id=session_id))
 
     # You can also register a function_name of None to get all functions
     # sent to the same callback with an additional function_name parameter.
@@ -161,7 +163,9 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
 
     runner = PipelineRunner(handle_sigint=runner_args.handle_sigint)
 
-    await runner.run(task)
+    # this isn't the right way to do this
+    with using_session(session_id=session_id):
+        await runner.run(task)
 
 
 async def bot(runner_args: RunnerArguments):
