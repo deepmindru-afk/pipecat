@@ -4,14 +4,19 @@
 # SPDX-License-Identifier: BSD 2-Clause License
 #
 
-"""WhatsApp API.
+"""WhatsApp API Client.
 
-API to communicate with WhatsApp Cloud API.
+This module provides a client for communicating with the WhatsApp Cloud API,
+handling webhook requests, managing WebRTC connections, and processing
+WhatsApp call events.
 """
 
 import asyncio
+from typing import Awaitable, Callable, Dict, List, Optional, Union
+
 import aiohttp
 from loguru import logger
+
 from pipecat.transports.network.webrtc_connection import IceServer, SmallWebRTCConnection
 from pipecat.utils.whatsapp.api import (
     WhatsAppApi,
@@ -21,27 +26,58 @@ from pipecat.utils.whatsapp.api import (
     WhatsAppTerminateCallValue,
     WhatsAppWebhookRequest,
 )
-from typing import Dict
 
-
-ice_servers = [
-    IceServer(
-        urls="stun:stun.l.google.com:19302",
-    )
-]
 
 class WhatsAppClient:
+    """WhatsApp Cloud API client for handling calls and webhook requests.
+
+    This client manages WhatsApp call connections using WebRTC, processes webhook
+    events from WhatsApp, and maintains ongoing call state. It supports both
+    incoming call handling and call termination through the WhatsApp Cloud API.
+
+    Attributes:
+        _whatsapp_api: WhatsApp API instance for making API calls
+        _ongoing_calls_map: Dictionary mapping call IDs to WebRTC connections
+        _ice_servers: List of ICE servers for WebRTC connections
+    """
 
     def __init__(
-        self, whatsapp_token: str, phone_number_id: str, session: aiohttp.ClientSession
+        self,
+        whatsapp_token: str,
+        phone_number_id: str,
+        session: aiohttp.ClientSession,
+        ice_servers: Optional[List[IceServer]] = None,
     ) -> None:
+        """Initialize the WhatsApp client.
+
+        Args:
+            whatsapp_token: WhatsApp API access token
+            phone_number_id: WhatsApp phone number ID for the business account
+            session: aiohttp session for making HTTP requests
+            ice_servers: List of ICE servers for WebRTC connections. If None,
+                        defaults to Google's public STUN server
+        """
         self._whatsapp_api = WhatsAppApi(
             whatsapp_token=whatsapp_token, phone_number_id=phone_number_id, session=session
         )
         self._ongoing_calls_map: Dict[str, SmallWebRTCConnection] = {}
 
-    async def terminate_all_calls(self):
-        """Terminate all ongoing WhatsApp calls."""
+        # Set default ICE servers if none provided
+        if ice_servers is None:
+            self._ice_servers = [IceServer(urls="stun:stun.l.google.com:19302")]
+        else:
+            self._ice_servers = ice_servers
+
+    async def terminate_all_calls(self) -> None:
+        """Terminate all ongoing WhatsApp calls.
+
+        This method will:
+        1. Send termination requests to WhatsApp API for each ongoing call
+        2. Disconnect all WebRTC connections
+        3. Clear the ongoing calls map
+
+        All terminations are executed concurrently for efficiency.
+        """
         logger.info("Will terminate all ongoing WhatsApp calls")
 
         if not self._ongoing_calls_map:
@@ -67,25 +103,99 @@ class WhatsAppClient:
         self._ongoing_calls_map.clear()
         logger.info("All calls terminated successfully")
 
-    async def handle_webhook_request(self, request: WhatsAppWebhookRequest):
-        """Handle a webhook request from WhatsApp."""
-        for entry in request.entry:
-            for change in entry.changes:
-                # Handle connect events
-                if isinstance(change.value, WhatsAppConnectCallValue):
-                    for call in change.value.calls:
-                        if call.event == "connect":
-                            return await self._handle_connect_event(call)
+    async def handle_webhook_request(
+        self,
+        request: WhatsAppWebhookRequest,
+        connection_callback: Optional[Callable[[SmallWebRTCConnection], Awaitable[None]]] = None,
+    ) -> Optional[Union[SmallWebRTCConnection, Dict[str, str]]]:
+        """Handle a webhook request from WhatsApp.
 
-                # Handle terminate events
-                elif isinstance(change.value, WhatsAppTerminateCallValue):
-                    for call in change.value.calls:
-                        if call.event == "terminate":
-                            return await self._handle_terminate_event(call)
+        This method processes incoming webhook requests and handles both
+        connect and terminate events. For connect events, it establishes
+        a WebRTC connection and optionally invokes a callback with the
+        new connection.
 
-        raise NotImplementedError("No supported event found")
+        Args:
+            request: The webhook request from WhatsApp containing call events
+            connection_callback: Optional callback function to invoke when a new
+                               WebRTC connection is established. The callback
+                               receives the SmallWebRTCConnection instance.
+
+        Returns:
+            For connect events: SmallWebRTCConnection instance
+            For terminate events: Dictionary with status information
+            None: If no supported events are found
+
+        Raises:
+            ValueError: If the webhook request contains no supported events
+            Exception: If connection establishment or API calls fail
+        """
+        try:
+            for entry in request.entry:
+                for change in entry.changes:
+                    # Handle connect events
+                    if isinstance(change.value, WhatsAppConnectCallValue):
+                        for call in change.value.calls:
+                            if call.event == "connect":
+                                logger.info(f"Processing connect event for call {call.id}")
+                                try:
+                                    connection = await self._handle_connect_event(call)
+
+                                    # Invoke callback if provided
+                                    if connection_callback and connection:
+                                        try:
+                                            await connection_callback(connection)
+                                            logger.debug(
+                                                f"Connection callback executed successfully for call {call.id}"
+                                            )
+                                        except Exception as callback_error:
+                                            logger.error(
+                                                f"Connection callback failed for call {call.id}: {callback_error}"
+                                            )
+                                            # Continue execution despite callback failure
+
+                                    return connection
+                                except Exception as connect_error:
+                                    logger.error(
+                                        f"Failed to handle connect event for call {call.id}: {connect_error}"
+                                    )
+                                    raise
+
+                    # Handle terminate events
+                    elif isinstance(change.value, WhatsAppTerminateCallValue):
+                        for call in change.value.calls:
+                            if call.event == "terminate":
+                                logger.info(f"Processing terminate event for call {call.id}")
+                                try:
+                                    return await self._handle_terminate_event(call)
+                                except Exception as terminate_error:
+                                    logger.error(
+                                        f"Failed to handle terminate event for call {call.id}: {terminate_error}"
+                                    )
+                                    raise
+
+            # No supported events found
+            error_msg = "No supported event found in webhook request"
+            logger.warning(f"{error_msg}: {request}")
+            raise ValueError(error_msg)
+
+        except Exception as e:
+            logger.error(f"Error processing webhook request: {e}")
+            logger.debug(f"Webhook request details: {request}")
+            raise
 
     def _filter_sdp_for_whatsapp(self, sdp: str) -> str:
+        """Filter SDP to be compatible with WhatsApp requirements.
+
+        WhatsApp only supports SHA-256 fingerprints, so this method removes
+        other fingerprint types from the SDP.
+
+        Args:
+            sdp: The original SDP string
+
+        Returns:
+            Filtered SDP string compatible with WhatsApp
+        """
         lines = sdp.splitlines()
         filtered = []
         for line in lines:
@@ -94,57 +204,131 @@ class WhatsAppClient:
             filtered.append(line)
         return "\r\n".join(filtered) + "\r\n"
 
-    async def _handle_connect_event(self, call: WhatsAppConnectCall):
-        """Handle a CONNECT event: pre-accept and accept the call."""
+    async def _handle_connect_event(self, call: WhatsAppConnectCall) -> SmallWebRTCConnection:
+        """Handle a CONNECT event by establishing WebRTC connection and accepting the call.
+
+        This method:
+        1. Creates a new WebRTC connection using configured ICE servers
+        2. Initializes the connection with the provided SDP
+        3. Generates an SDP answer and filters it for WhatsApp compatibility
+        4. Pre-accepts the call with WhatsApp API
+        5. Accepts the call with WhatsApp API
+        6. Stores the connection for later management
+
+        Args:
+            call: WhatsApp connect call event
+
+        Returns:
+            The established SmallWebRTCConnection instance
+
+        Raises:
+            Exception: If pre-accept or accept API calls fail
+        """
         logger.info(f"Incoming call from {call.from_}, call_id: {call.id}")
 
-        pipecat_connection = SmallWebRTCConnection(ice_servers)
-        await pipecat_connection.initialize(sdp=call.session.sdp, type=call.session.sdp_type)
-        sdp_answer = pipecat_connection.get_answer().get("sdp")
-        sdp_answer = self._filter_sdp_for_whatsapp(sdp_answer)
+        pipecat_connection = None
+        try:
+            # Create and initialize WebRTC connection
+            pipecat_connection = SmallWebRTCConnection(self._ice_servers)
+            await pipecat_connection.initialize(sdp=call.session.sdp, type=call.session.sdp_type)
+            sdp_answer = pipecat_connection.get_answer().get("sdp")
+            sdp_answer = self._filter_sdp_for_whatsapp(sdp_answer)
 
-        logger.info(f"SDP answer: {sdp_answer}")
+            logger.info(f"SDP answer generated for call {call.id}")
 
-        pre_accept_resp = await self._whatsapp_api.answer_call_to_whatsapp(
-            call.id, "pre_accept", sdp_answer, call.from_
-        )
-        if not pre_accept_resp.get("success", False):
-            logger.error(f"Failed to pre-accept call: {pre_accept_resp}")
-            await pipecat_connection.disconnect()
-            raise Exception("Failed to pre-accept call")
+            # Pre-accept the call
+            try:
+                pre_accept_resp = await self._whatsapp_api.answer_call_to_whatsapp(
+                    call.id, "pre_accept", sdp_answer, call.from_
+                )
+                if not pre_accept_resp.get("success", False):
+                    logger.error(f"Failed to pre-accept call {call.id}: {pre_accept_resp}")
+                    raise Exception(f"Failed to pre-accept call: {pre_accept_resp}")
 
-        logger.info("Pre-accept response:", pre_accept_resp)
+                logger.info(f"Pre-accept successful for call {call.id}")
+            except Exception as e:
+                logger.error(f"Pre-accept API call failed for call {call.id}: {e}")
+                raise Exception(f"Failed to pre-accept call: {e}")
 
-        accept_resp = await self._whatsapp_api.answer_call_to_whatsapp(
-            call.id, "accept", sdp_answer, call.from_
-        )
-        if not accept_resp.get("success", False):
-            logger.error(f"Failed to accept call: {accept_resp}")
-            await pipecat_connection.disconnect()
-            raise Exception("Failed to to accept call")
+            # Accept the call
+            try:
+                accept_resp = await self._whatsapp_api.answer_call_to_whatsapp(
+                    call.id, "accept", sdp_answer, call.from_
+                )
+                if not accept_resp.get("success", False):
+                    logger.error(f"Failed to accept call {call.id}: {accept_resp}")
+                    raise Exception(f"Failed to accept call: {accept_resp}")
 
-        logger.info("Accept response:", accept_resp)
+                logger.info(f"Accept successful for call {call.id}")
+            except Exception as e:
+                logger.error(f"Accept API call failed for call {call.id}: {e}")
+                raise Exception(f"Failed to accept call: {e}")
 
-        # Storing the connection so we can disconnect later
-        self._ongoing_calls_map[call.id] = pipecat_connection
+            # Store the connection for management
+            self._ongoing_calls_map[call.id] = pipecat_connection
 
-        @pipecat_connection.event_handler("closed")
-        async def handle_disconnected(webrtc_connection: SmallWebRTCConnection):
-            logger.info(f"Peer has disconnected: {webrtc_connection.pc_id}")
+            # Set up disconnect handler
+            @pipecat_connection.event_handler("closed")
+            async def handle_disconnected(webrtc_connection: SmallWebRTCConnection):
+                logger.info(f"Peer connection closed: {webrtc_connection.pc_id} for call {call.id}")
+                # Clean up from ongoing calls map
+                self._ongoing_calls_map.pop(call.id, None)
 
-        return pipecat_connection
+            logger.info(f"WebRTC connection established successfully for call {call.id}")
+            return pipecat_connection
 
-    async def _handle_terminate_event(self, call: WhatsAppTerminateCall):
-        """Handle a TERMINATE event: clean up resources and log call completion."""
+        except Exception as e:
+            # Clean up connection on failure
+            if pipecat_connection:
+                try:
+                    await pipecat_connection.disconnect()
+                except Exception as cleanup_error:
+                    logger.error(
+                        f"Failed to cleanup connection for call {call.id}: {cleanup_error}"
+                    )
+
+            logger.error(f"Failed to handle connect event for call {call.id}: {e}")
+            raise
+
+    async def _handle_terminate_event(self, call: WhatsAppTerminateCall) -> Dict[str, str]:
+        """Handle a TERMINATE event by cleaning up resources and logging call completion.
+
+        This method:
+        1. Logs call termination details including duration if available
+        2. Disconnects the associated WebRTC connection
+        3. Removes the call from the ongoing calls map
+
+        Args:
+            call: WhatsApp terminate call event
+
+        Returns:
+            Dictionary with status information about the termination handling
+        """
         logger.info(f"Call terminated from {call.from_}, call_id: {call.id}")
         logger.info(f"Call status: {call.status}")
         if call.duration:
             logger.info(f"Call duration: {call.duration} seconds")
 
-        if call.id in self._ongoing_calls_map:
-            pipecat_connection = self._ongoing_calls_map[call.id]
-            logger.info(f"Finishing peer connection: {call.id}")
-            await pipecat_connection.disconnect()
-            self._ongoing_calls_map.pop(call.id, None)
+        try:
+            if call.id in self._ongoing_calls_map:
+                pipecat_connection = self._ongoing_calls_map[call.id]
+                logger.info(f"Disconnecting WebRTC connection for call {call.id}")
 
-        return {"status": "success", "message": "Call termination handled"}
+                try:
+                    await pipecat_connection.disconnect()
+                    logger.info(f"WebRTC connection disconnected successfully for call {call.id}")
+                except Exception as disconnect_error:
+                    logger.error(
+                        f"Failed to disconnect WebRTC connection for call {call.id}: {disconnect_error}"
+                    )
+
+                # Remove from ongoing calls map
+                self._ongoing_calls_map.pop(call.id, None)
+            else:
+                logger.warning(f"Call {call.id} not found in ongoing calls map")
+
+            return {"status": "success", "message": "Call termination handled successfully"}
+
+        except Exception as e:
+            logger.error(f"Error handling terminate event for call {call.id}: {e}")
+            return {"status": "error", "message": f"Failed to handle call termination: {e}"}
