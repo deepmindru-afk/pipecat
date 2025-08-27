@@ -107,7 +107,7 @@ class WhatsAppClient:
         self,
         request: WhatsAppWebhookRequest,
         connection_callback: Optional[Callable[[SmallWebRTCConnection], Awaitable[None]]] = None,
-    ) -> Optional[Union[SmallWebRTCConnection, Dict[str, str]]]:
+    ) -> bool:
         """Handle a webhook request from WhatsApp.
 
         This method processes incoming webhook requests and handles both
@@ -122,9 +122,7 @@ class WhatsAppClient:
                                receives the SmallWebRTCConnection instance.
 
         Returns:
-            For connect events: SmallWebRTCConnection instance
-            For terminate events: Dictionary with status information
-            None: If no supported events are found
+            bool: True if the webhook request was handled successfully, False otherwise
 
         Raises:
             ValueError: If the webhook request contains no supported events
@@ -154,7 +152,7 @@ class WhatsAppClient:
                                             )
                                             # Continue execution despite callback failure
 
-                                    return connection
+                                    return True
                                 except Exception as connect_error:
                                     logger.error(
                                         f"Failed to handle connect event for call {call.id}: {connect_error}"
@@ -290,7 +288,7 @@ class WhatsAppClient:
             logger.error(f"Failed to handle connect event for call {call.id}: {e}")
             raise
 
-    async def _handle_terminate_event(self, call: WhatsAppTerminateCall) -> Dict[str, str]:
+    async def _handle_terminate_event(self, call: WhatsAppTerminateCall) -> bool:
         """Handle a TERMINATE event by cleaning up resources and logging call completion.
 
         This method:
@@ -302,7 +300,7 @@ class WhatsAppClient:
             call: WhatsApp terminate call event
 
         Returns:
-            Dictionary with status information about the termination handling
+            bool: True if the call was terminated successfully, False otherwise
         """
         logger.info(f"Call terminated from {call.from_}, call_id: {call.id}")
         logger.info(f"Call status: {call.status}")
@@ -327,8 +325,8 @@ class WhatsAppClient:
             else:
                 logger.warning(f"Call {call.id} not found in ongoing calls map")
 
-            return {"status": "success", "message": "Call termination handled successfully"}
+            return True
 
         except Exception as e:
             logger.error(f"Error handling terminate event for call {call.id}: {e}")
-            return {"status": "error", "message": f"Failed to handle call termination: {e}"}
+            return False
