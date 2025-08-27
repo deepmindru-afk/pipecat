@@ -279,7 +279,7 @@ class WhatsAppApi:
         ) as response:
             return await response.json()
 
-    async def reject_call_to_whatsapp(self, call_id: str, from_: str):
+    async def reject_call_to_whatsapp(self, call_id: str):
         """Reject an incoming WhatsApp call.
 
         This method rejects a call that was received via connect webhook.
@@ -288,7 +288,6 @@ class WhatsAppApi:
 
         Args:
             call_id: Unique identifier for the call (from connect webhook)
-            from_: Caller's phone number (WhatsApp ID format)
 
         Returns:
             Dict containing the API response with success status and any error details
@@ -297,7 +296,7 @@ class WhatsAppApi:
             This should be called instead of answer_call_to_whatsapp when you want
             to decline the incoming call. The caller will see the call as rejected.
         """
-        logger.debug(f"Rejecting call {call_id} from {from_}")
+        logger.debug(f"Rejecting call {call_id}")
         async with self.session.post(
             self.whatsapp_url,
             headers={
@@ -306,7 +305,6 @@ class WhatsAppApi:
             },
             json={
                 "messaging_product": "whatsapp",
-                "to": from_,
                 "action": "reject",
                 "call_id": call_id,
             },
