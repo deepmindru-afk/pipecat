@@ -103,6 +103,36 @@ class WhatsAppClient:
         self._ongoing_calls_map.clear()
         logger.info("All calls terminated successfully")
 
+    async def handle_verify_webhook_request(
+        self, params: Dict[str, str], expected_verification_token: str
+    ) -> int:
+        """Handle a verify webhook request from WhatsApp.
+
+        Args:
+            params: Dictionary containing webhook parameters from query string
+            expected_verification_token: The expected verification token to validate against
+
+        Returns:
+            int: The challenge value if verification succeeds
+
+        Raises:
+            ValueError: If verification fails due to missing parameters or invalid token
+        """
+        mode = params.get("hub.mode")
+        challenge = params.get("hub.challenge")
+        verify_token = params.get("hub.verify_token")
+
+        if not mode or not challenge or not verify_token:
+            raise ValueError("Missing required webhook verification parameters")
+
+        if mode != "subscribe":
+            raise ValueError(f"Invalid hub mode: expected 'subscribe', got '{mode}'")
+
+        if verify_token != expected_verification_token:
+            raise ValueError("Webhook verification token mismatch")
+
+        return int(challenge)
+
     async def handle_webhook_request(
         self,
         request: WhatsAppWebhookRequest,
