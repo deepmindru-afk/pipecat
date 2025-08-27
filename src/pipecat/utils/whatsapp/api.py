@@ -311,7 +311,7 @@ class WhatsAppApi:
         ) as response:
             return await response.json()
 
-    async def terminate_call_to_whatsapp(self, call_id: str, from_: str):
+    async def terminate_call_to_whatsapp(self, call_id: str):
         """Terminate an active WhatsApp call.
 
         This method ends an ongoing call that has been previously accepted.
@@ -320,7 +320,6 @@ class WhatsAppApi:
 
         Args:
             call_id: Unique identifier for the active call
-            from_: Caller's phone number (WhatsApp ID format)
 
         Returns:
             Dict containing the API response with success status and any error details
@@ -330,7 +329,7 @@ class WhatsAppApi:
             currently active. For incoming calls that haven't been accepted yet,
             use reject_call_to_whatsapp instead.
         """
-        logger.debug(f"Terminating call {call_id} with {from_}")
+        logger.debug(f"Terminating call {call_id}")
         async with self.session.post(
             self.whatsapp_url,
             headers={
@@ -339,7 +338,6 @@ class WhatsAppApi:
             },
             json={
                 "messaging_product": "whatsapp",
-                "to": from_,
                 "action": "terminate",
                 "call_id": call_id,
             },
