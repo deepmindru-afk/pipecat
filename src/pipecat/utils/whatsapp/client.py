@@ -78,18 +78,18 @@ class WhatsAppClient:
 
         All terminations are executed concurrently for efficiency.
         """
-        logger.info("Will terminate all ongoing WhatsApp calls")
+        logger.debug("Will terminate all ongoing WhatsApp calls")
 
         if not self._ongoing_calls_map:
-            logger.info("No ongoing calls to terminate")
+            logger.debug("No ongoing calls to terminate")
             return
 
-        logger.info(f"Terminating {len(self._ongoing_calls_map)} ongoing calls")
+        logger.debug(f"Terminating {len(self._ongoing_calls_map)} ongoing calls")
 
         # Terminate each call via WhatsApp API
         termination_tasks = []
         for call_id, pipecat_connection in self._ongoing_calls_map.items():
-            logger.info(f"Terminating call {call_id}")
+            logger.debug(f"Terminating call {call_id}")
             # Call WhatsApp API to terminate the call
             if self._whatsapp_api:
                 termination_tasks.append(self._whatsapp_api.terminate_call_to_whatsapp(call_id))
@@ -101,7 +101,7 @@ class WhatsAppClient:
 
         # Clear the ongoing calls map
         self._ongoing_calls_map.clear()
-        logger.info("All calls terminated successfully")
+        logger.debug("All calls terminated successfully")
 
     async def handle_verify_webhook_request(
         self, params: Dict[str, str], expected_verification_token: str
@@ -165,7 +165,7 @@ class WhatsAppClient:
                     if isinstance(change.value, WhatsAppConnectCallValue):
                         for call in change.value.calls:
                             if call.event == "connect":
-                                logger.info(f"Processing connect event for call {call.id}")
+                                logger.debug(f"Processing connect event for call {call.id}")
                                 try:
                                     connection = await self._handle_connect_event(call)
 
@@ -193,7 +193,7 @@ class WhatsAppClient:
                     elif isinstance(change.value, WhatsAppTerminateCallValue):
                         for call in change.value.calls:
                             if call.event == "terminate":
-                                logger.info(f"Processing terminate event for call {call.id}")
+                                logger.debug(f"Processing terminate event for call {call.id}")
                                 try:
                                     return await self._handle_terminate_event(call)
                                 except Exception as terminate_error:
@@ -252,7 +252,7 @@ class WhatsAppClient:
         Raises:
             Exception: If pre-accept or accept API calls fail
         """
-        logger.info(f"Incoming call from {call.from_}, call_id: {call.id}")
+        logger.debug(f"Incoming call from {call.from_}, call_id: {call.id}")
 
         pipecat_connection = None
         try:
@@ -262,7 +262,7 @@ class WhatsAppClient:
             sdp_answer = pipecat_connection.get_answer().get("sdp")
             sdp_answer = self._filter_sdp_for_whatsapp(sdp_answer)
 
-            logger.info(f"SDP answer generated for call {call.id}")
+            logger.debug(f"SDP answer generated for call {call.id}")
 
             # Pre-accept the call
             try:
@@ -273,7 +273,7 @@ class WhatsAppClient:
                     logger.error(f"Failed to pre-accept call {call.id}: {pre_accept_resp}")
                     raise Exception(f"Failed to pre-accept call: {pre_accept_resp}")
 
-                logger.info(f"Pre-accept successful for call {call.id}")
+                logger.debug(f"Pre-accept successful for call {call.id}")
             except Exception as e:
                 logger.error(f"Pre-accept API call failed for call {call.id}: {e}")
                 raise Exception(f"Failed to pre-accept call: {e}")
@@ -287,7 +287,7 @@ class WhatsAppClient:
                     logger.error(f"Failed to accept call {call.id}: {accept_resp}")
                     raise Exception(f"Failed to accept call: {accept_resp}")
 
-                logger.info(f"Accept successful for call {call.id}")
+                logger.debug(f"Accept successful for call {call.id}")
             except Exception as e:
                 logger.error(f"Accept API call failed for call {call.id}: {e}")
                 raise Exception(f"Failed to accept call: {e}")
@@ -298,11 +298,13 @@ class WhatsAppClient:
             # Set up disconnect handler
             @pipecat_connection.event_handler("closed")
             async def handle_disconnected(webrtc_connection: SmallWebRTCConnection):
-                logger.info(f"Peer connection closed: {webrtc_connection.pc_id} for call {call.id}")
+                logger.debug(
+                    f"Peer connection closed: {webrtc_connection.pc_id} for call {call.id}"
+                )
                 # Clean up from ongoing calls map
                 self._ongoing_calls_map.pop(call.id, None)
 
-            logger.info(f"WebRTC connection established successfully for call {call.id}")
+            logger.debug(f"WebRTC connection established successfully for call {call.id}")
             return pipecat_connection
 
         except Exception as e:
@@ -332,19 +334,19 @@ class WhatsAppClient:
         Returns:
             bool: True if the call was terminated successfully, False otherwise
         """
-        logger.info(f"Call terminated from {call.from_}, call_id: {call.id}")
-        logger.info(f"Call status: {call.status}")
+        logger.debug(f"Call terminated from {call.from_}, call_id: {call.id}")
+        logger.debug(f"Call status: {call.status}")
         if call.duration:
-            logger.info(f"Call duration: {call.duration} seconds")
+            logger.debug(f"Call duration: {call.duration} seconds")
 
         try:
             if call.id in self._ongoing_calls_map:
                 pipecat_connection = self._ongoing_calls_map[call.id]
-                logger.info(f"Disconnecting WebRTC connection for call {call.id}")
+                logger.debug(f"Disconnecting WebRTC connection for call {call.id}")
 
                 try:
                     await pipecat_connection.disconnect()
-                    logger.info(f"WebRTC connection disconnected successfully for call {call.id}")
+                    logger.debug(f"WebRTC connection disconnected successfully for call {call.id}")
                 except Exception as disconnect_error:
                     logger.error(
                         f"Failed to disconnect WebRTC connection for call {call.id}: {disconnect_error}"
