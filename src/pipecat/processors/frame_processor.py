@@ -742,7 +742,10 @@ class FrameProcessor(BaseObject):
     async def __cancel_input_task(self):
         """Cancel the frame input processing task."""
         if self.__input_frame_task:
-            await self.cancel_task(self.__input_frame_task)
+            # Apply a timeout as a safeguard: if a library swallows asyncio.CancelledError,
+            # the task would otherwise never be cancelled. With a timeout, we can detect this
+            # situation and surface it in the logs instead of hanging indefinitely.
+            await self.cancel_task(self.__input_frame_task, 3)
             self.__input_frame_task = None
 
     def __create_process_task(self):
