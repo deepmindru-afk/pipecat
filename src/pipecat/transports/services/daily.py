@@ -31,8 +31,6 @@ from pipecat.frames.frames import (
     InputAudioRawFrame,
     InterimTranscriptionFrame,
     OutputAudioRawFrame,
-    OutputDTMFFrame,
-    OutputDTMFUrgentFrame,
     OutputImageRawFrame,
     SpriteFrame,
     StartFrame,
@@ -350,6 +348,7 @@ class DailyTransportClient(EventHandler):
         self._video_renderers = {}
         self._transcription_ids = []
         self._transcription_status = None
+        self._dial_out_session_id: str = ""
 
         self._joining = False
         self._joined = False
@@ -639,6 +638,9 @@ class DailyTransportClient(EventHandler):
 
     async def _join(self):
         """Execute the actual room join operation."""
+        if not self._client:
+            return
+
         future = self._get_event_loop().create_future()
 
         camera_enabled = self._params.video_out_enabled and self._params.camera_out_enabled
@@ -730,6 +732,9 @@ class DailyTransportClient(EventHandler):
 
     async def _leave(self):
         """Execute the actual room leave operation."""
+        if not self._client:
+            return
+
         future = self._get_event_loop().create_future()
         self._client.leave(completion=completion_callback(future))
         return await asyncio.wait_for(future, timeout=10)
@@ -790,6 +795,14 @@ class DailyTransportClient(EventHandler):
         Args:
             settings: DTMF settings including tones and target session.
         """
+        session_id = settings.get("sessionId") or self._dial_out_session_id
+        if not session_id:
+            logger.error("Unable to send DTMF: 'sessionId' is not set")
+            return
+
+        # Update 'sessionId' field.
+        settings["sessionId"] = session_id
+
         future = self._get_event_loop().create_future()
         self._client.send_dtmf(settings, completion=completion_callback(future))
         await future
@@ -1166,6 +1179,7 @@ class DailyTransportClient(EventHandler):
         Args:
             data: Dial-out connection data.
         """
+        self._dial_out_session_id = data["sessionId"] if "sessionId" in data else ""
         self._call_event_callback(self._callbacks.on_dialout_connected, data)
 
     def on_dialout_stopped(self, data: Any):
@@ -1174,6 +1188,9 @@ class DailyTransportClient(EventHandler):
         Args:
             data: Dial-out stop data.
         """
+        # Cleanup only if our session stopped.
+        if data["sessionId"] == self._dial_out_session_id:
+            self._dial_out_session_id = ""
         self._call_event_callback(self._callbacks.on_dialout_stopped, data)
 
     def on_dialout_error(self, data: Any):
@@ -1182,6 +1199,9 @@ class DailyTransportClient(EventHandler):
         Args:
             data: Dial-out error data.
         """
+        # Cleanup only if our session errored out.
+        if data["sessionId"] == self._dial_out_session_id:
+            self._dial_out_session_id = ""
         self._call_event_callback(self._callbacks.on_dialout_error, data)
 
     def on_dialout_warning(self, data: Any):
@@ -1654,7 +1674,7 @@ class DailyInputTransport(BaseInputTransport):
 class DailyOutputTransport(BaseOutputTransport):
     """Handles outgoing media streams and events to Daily calls.
 
-    Manages sending audio, video, DTMF tones, and other data to Daily calls,
+    Manages sending audio, video and other data to Daily calls,
     including audio destination registration and message transmission.
     """
 
@@ -1760,19 +1780,6 @@ class DailyOutputTransport(BaseOutputTransport):
             destination: The destination identifier to register.
         """
         await self._client.register_audio_destination(destination)
-
-    async def write_dtmf(self, frame: OutputDTMFFrame | OutputDTMFUrgentFrame):
-        """Write DTMF tones to the call.
-
-        Args:
-            frame: The DTMF frame containing tone information.
-        """
-        await self._client.send_dtmf(
-            {
-                "sessionId": frame.transport_destination,
-                "tones": frame.button.value,
-            }
-        )
 
     async def write_audio_frame(self, frame: OutputAudioRawFrame):
         """Write an audio frame to the Daily call.
@@ -1999,25 +2006,6 @@ class DailyTransport(BaseTransport):
             participant_id: ID of the participant to stop dial-out for.
         """
         await self._client.stop_dialout(participant_id)
-
-    async def send_dtmf(self, settings):
-        """Send DTMF tones during a call (deprecated).
-
-        .. deprecated:: 0.0.69
-            Push an `OutputDTMFFrame` or an `OutputDTMFUrgentFrame` instead.
-
-        Args:
-            settings: DTMF settings including tones and target session.
-        """
-        import warnings
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("always")
-            warnings.warn(
-                "`DailyTransport.send_dtmf()` is deprecated, push an `OutputDTMFFrame` or an `OutputDTMFUrgentFrame` instead.",
-                DeprecationWarning,
-            )
-        await self._client.send_dtmf(settings)
 
     async def sip_call_transfer(self, settings):
         """Transfer a SIP call to another destination.
